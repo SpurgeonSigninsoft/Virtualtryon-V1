@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>USA Opticals – Virtual Glasses Prototype</title>
+  <style>
+    :root {
+      font-family: Arial, Helvetica, sans-serif;
+      color: #1f2937;
+      background: #f5f7fb;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 24px;
+    }
+
+    .app {
+      width: min(1100px, 100%);
+      margin: auto;
+    }
+
+    h1 {
+      margin-bottom: 6px;
+      font-size: clamp(24px, 4vw, 38px);
+    }
+
+    .subtitle {
+      margin-top: 0;
+      color: #5f6b7a;
+    }
+
+    .panel {
+      background: white;
+      border-radius: 16px;
+      padding: 18px;
+      box-shadow: 0 10px 30px rgba(20, 35, 60, 0.08);
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: end;
+      margin-bottom: 18px;
+    }
+
+    .control {
+      display: grid;
+      gap: 5px;
+      min-width: 150px;
+    }
+
+    label {
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    input[type="file"],
+    input[type="range"],
+    button {
+      width: 100%;
+    }
+
+    button, .file-label {
+      border: 0;
+      border-radius: 10px;
+      padding: 11px 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button {
+      background: #111827;
+      color: white;
+    }
+
+    button.secondary {
+      background: #e5e7eb;
+      color: #111827;
+    }
+
+    .stage-wrap {
+      display: grid;
+      place-items: center;
+      background:
+        linear-gradient(45deg, #eef1f5 25%, transparent 25%),
+        linear-gradient(-45deg, #eef1f5 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #eef1f5 75%),
+        linear-gradient(-45deg, transparent 75%, #eef1f5 75%);
+      background-size: 24px 24px;
+      background-position: 0 0, 0 12px, 12px -12px, -12px 0;
+      border-radius: 14px;
+      min-height: 520px;
+      overflow: hidden;
+      border: 1px solid #e5e7eb;
+    }
+
+    canvas {
+      max-width: 100%;
+      max-height: 72vh;
+      display: block;
+      touch-action: none;
+      cursor: grab;
+    }
+
+    canvas:active { cursor: grabbing; }
+
+    .help {
+      margin-top: 14px;
+      color: #5f6b7a;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .status {
+      margin: 10px 0 0;
+      font-size: 14px;
+      font-weight: 700;
+      color: #166534;
+    }
+
+    @media (max-width: 650px) {
+      body { padding: 12px; }
+      .panel { padding: 12px; }
+      .stage-wrap { min-height: 380px; }
+      .control { flex: 1 1 140px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <h1>Virtual Glasses Try-On</h1>
+    <p class="subtitle">Prototype 1: upload a photo and manually fit a frame.</p>
+
+    <section class="panel">
+      <div class="toolbar">
+        <div class="control">
+          <label for="photoInput">Customer photo</label>
+          <input id="photoInput" type="file" accept="image/*" />
+        </div>
+
+        <div class="control">
+          <label for="frameInput">Glasses PNG (optional)</label>
+          <input id="frameInput" type="file" accept="image/png,image/webp" />
+        </div>
+
+        <div class="control">
+          <label for="sizeRange">Frame size</label>
+          <input id="sizeRange" type="range" min="60" max="700" value="300" />
+        </div>
+
+        <div class="control">
+          <label for="rotationRange">Rotation</label>
+          <input id="rotationRange" type="range" min="-35" max="35" value="0" />
+        </div>
+
+        <div class="control">
+          <button id="resetButton" class="secondary" type="button">Reset frame</button>
+        </div>
+
+        <div class="control">
+          <button id="downloadButton" type="button">Download result</button>
+        </div>
+      </div>
+
+      <div class="stage-wrap">
+        <canvas id="canvas" width="800" height="600"></canvas>
+      </div>
+
+      <p class="status" id="status">Upload a face photo to begin.</p>
+      <p class="help">
+        Drag the glasses directly on the photo. Use the sliders to resize and rotate.
+        A transparent front-facing PNG of each real frame will give the best result.
+      </p>
+    </section>
+  </main>
+
+  <script>
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+
+    const photoInput = document.getElementById("photoInput");
+    const frameInput = document.getElementById("frameInput");
+    const sizeRange = document.getElementById("sizeRange");
+    const rotationRange = document.getElementById("rotationRange");
+    const resetButton = document.getElementById("resetButton");
+    const downloadButton = document.getElementById("downloadButton");
+    const status = document.getElementById("status");
+
+    const photo = new Image();
+    const customFrame = new Image();
+
+    let photoLoaded = false;
+    let customFrameLoaded = false;
+    let dragging = false;
+    let dragOffsetX = 0;
+    let dragOffsetY = 0;
+
+    const frame = {
+      x: canvas.width / 2,
+      y: canvas.height / 2,
+      width: 300,
+      rotation: 0
+    };
+
+    function drawPlaceholder() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#f8fafc";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#64748b";
+      ctx.textAlign = "center";
+      ctx.font = "bold 26px Arial";
+      ctx.fillText("Upload a face photo", canvas.width / 2, canvas.height / 2 - 10);
+      ctx.font = "16px Arial";
+      ctx.fillText("Then drag and resize the glasses", canvas.width / 2, canvas.height / 2 + 25);
+    }
+
+    function fitPhotoToCanvas(image) {
+      const maxW = 900;
+      const maxH = 700;
+      const ratio = Math.min(maxW / image.naturalWidth, maxH / image.naturalHeight, 1);
+      canvas.width = Math.max(320, Math.round(image.naturalWidth * ratio));
+      canvas.height = Math.max(320, Math.round(image.naturalHeight * ratio));
+      frame.x = canvas.width / 2;
+      frame.y = canvas.height * 0.43;
+      frame.width = Math.min(canvas.width * 0.42, 360);
+      sizeRange.max = Math.max(700, canvas.width);
+      sizeRange.value = frame.width;
+    }
+
+    function drawDefaultGlasses(width) {
+      const height = width * 0.32;
+      const lensW = width * 0.38;
+      const lensH = height * 0.82;
+      const gap = width * 0.08;
+      const leftX = -(gap / 2 + lensW);
+      const rightX = gap / 2;
+
+      ctx.strokeStyle = "#111827";
+      ctx.lineWidth = Math.max(4, width * 0.018);
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+
+      roundedRect(leftX, -lensH / 2, lensW, lensH, lensH * 0.28);
+      roundedRect(rightX, -lensH / 2, lensW, lensH, lensH * 0.28);
+
+      ctx.beginPath();
+      ctx.moveTo(-gap / 2, -lensH * 0.08);
+      ctx.bezierCurveTo(-gap * 0.25, -lensH * 0.30, gap * 0.25, -lensH * 0.30, gap / 2, -lensH * 0.08);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(leftX, -lensH * 0.15);
+      ctx.lineTo(leftX - width * 0.09, -lensH * 0.05);
+      ctx.moveTo(rightX + lensW, -lensH * 0.15);
+      ctx.lineTo(rightX + lensW + width * 0.09, -lensH * 0.05);
+      ctx.stroke();
+    }
+
+    function roundedRect(x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx.lineTo(x + r, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y);
+      ctx.stroke();
+    }
+
+    function render() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (!photoLoaded) {
+        drawPlaceholder();
+        return;
+      }
+
+      ctx.drawImage(photo, 0, 0, canvas.width, canvas.height);
+
+      ctx.save();
+      ctx.translate(frame.x, frame.y);
+      ctx.rotate(frame.rotation * Math.PI / 180);
+
+      if (customFrameLoaded) {
+        const aspect = customFrame.naturalHeight / customFrame.naturalWidth;
+        const h = frame.width * aspect;
+        ctx.drawImage(customFrame, -frame.width / 2, -h / 2, frame.width, h);
+      } else {
+        drawDefaultGlasses(frame.width);
+      }
+
+      ctx.restore();
+    }
+
+    function loadFileAsImage(file, image, callback) {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        image.onload = callback;
+        image.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    photoInput.addEventListener("change", () => {
+      const file = photoInput.files[0];
+      loadFileAsImage(file, photo, () => {
+        photoLoaded = true;
+        fitPhotoToCanvas(photo);
+        status.textContent = "Photo loaded. Drag the frame over the eyes.";
+        render();
+      });
+    });
+
+    frameInput.addEventListener("change", () => {
+      const file = frameInput.files[0];
+      loadFileAsImage(file, customFrame, () => {
+        customFrameLoaded = true;
+        status.textContent = "Custom frame loaded.";
+        render();
+      });
+    });
+
+    sizeRange.addEventListener("input", () => {
+      frame.width = Number(sizeRange.value);
+      render();
+    });
+
+    rotationRange.addEventListener("input", () => {
+      frame.rotation = Number(rotationRange.value);
+      render();
+    });
+
+    resetButton.addEventListener("click", () => {
+      frame.x = canvas.width / 2;
+      frame.y = canvas.height * 0.43;
+      frame.width = Math.min(canvas.width * 0.42, 360);
+      frame.rotation = 0;
+      sizeRange.value = frame.width;
+      rotationRange.value = 0;
+      render();
+    });
+
+    function pointerPosition(event) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: (event.clientX - rect.left) * (canvas.width / rect.width),
+        y: (event.clientY - rect.top) * (canvas.height / rect.height)
+      };
+    }
+
+    canvas.addEventListener("pointerdown", event => {
+      if (!photoLoaded) return;
+      const p = pointerPosition(event);
+      dragging = true;
+      dragOffsetX = p.x - frame.x;
+      dragOffsetY = p.y - frame.y;
+      canvas.setPointerCapture(event.pointerId);
+    });
+
+    canvas.addEventListener("pointermove", event => {
+      if (!dragging) return;
+      const p = pointerPosition(event);
+      frame.x = p.x - dragOffsetX;
+      frame.y = p.y - dragOffsetY;
+      render();
+    });
+
+    canvas.addEventListener("pointerup", () => dragging = false);
+    canvas.addEventListener("pointercancel", () => dragging = false);
+
+    downloadButton.addEventListener("click", () => {
+      if (!photoLoaded) {
+        alert("Please upload a photo first.");
+        return;
+      }
+
+      render();
+      const link = document.createElement("a");
+      link.download = "virtual-glasses-result.png";
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    });
+
+    drawPlaceholder();
+  </script>
+</body>
+</html>
